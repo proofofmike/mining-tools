@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Logs / output
+*.log
+*.out
+*.csv
+*.jsonl
+
+# Secrets / local config
+.env
+.env.*
+*.key
+*.pem
+*.token
+*secret*
+*secrets*
