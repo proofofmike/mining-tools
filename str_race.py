@@ -44,9 +44,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 DEFAULT_POOLS: List[Tuple[str, str, int, str]] = [
     ("ckpool",       "solo.ckpool.org",            3333,  "US"),
     ("atlaspool",    "solo.atlaspool.io",          3333,  "US"),
-    ("2miners",      "solo-btc.2miners.com",      2323,  "US"),
     ("public_pool",  "public-pool.io",             3333,  "US"),
-#   ("parasite",     "parasite.wtf",               42069, "US"),
     ("solofury",     "btc.solofury.com",           6060,  "US"),
     ("solo_cat",     "solo.cat",                   3333,  "US"),
     ("helios",       "btc.heliospool.com",         3333,  "CA"),
