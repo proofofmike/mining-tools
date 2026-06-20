@@ -563,16 +563,56 @@ def print_rankings(pools: Dict[str, PoolState], confirmed_count: int) -> None:
             f"avg={statistics.mean(p.all_arrival_offsets):.1f}ms seen={p.seen}/{confirmed_count} wins={p.wins}"
         )
 
-    print("\nRELIABILITY RANK:")
-    reliability_rank = sorted(
+
+
+def print_full_timing_table(pools: Dict[str, PoolState], confirmed_count: int) -> None:
+    print("\nFULL POOL TIMING:")
+    columns = [
+        ("Pool", 12),
+        ("Wins", 5),
+        ("Seen", 7),
+        ("Miss", 5),
+        ("Avg", 8),
+        ("Med", 8),
+        ("P95", 8),
+        ("Best", 8),
+        ("Worst", 8),
+        ("Reconn", 7),
+        ("Timeout", 7),
+        ("Closed", 6),
+    ]
+
+    header = " ".join(title.ljust(width) for title, width in columns)
+    print(header)
+    print("-" * len(header))
+
+    ranked = sorted(
         pools.values(),
-        key=lambda p: (-p.seen, p.missed, p.reconnects, p.read_timeouts + p.remote_closes, p.name),
+        key=lambda p: (
+            statistics.median(p.all_arrival_offsets) if p.all_arrival_offsets else float("inf"),
+            p.name,
+        ),
     )
-    for rank, p in enumerate(reliability_rank, 1):
-        print(
-            f"{rank:>2}. {p.name:<12} seen={p.seen}/{confirmed_count} missed={p.missed} "
-            f"reconnects={p.reconnects} timeouts={p.read_timeouts} closed={p.remote_closes}"
-        )
+
+    for p in ranked:
+        stats = delay_stats(p.all_arrival_offsets)
+
+        row = [
+            p.name.ljust(12),
+            str(p.wins).rjust(5),
+            f"{p.seen}/{confirmed_count}".rjust(7),
+            str(p.missed).rjust(5),
+            fnum(stats["avg"]).rjust(8),
+            fnum(stats["median"]).rjust(8),
+            fnum(stats["p95"]).rjust(8),
+            fnum(stats["best"]).rjust(8),
+            fnum(stats["worst"]).rjust(8),
+            str(p.reconnects).rjust(7),
+            str(p.read_timeouts).rjust(7),
+            str(p.remote_closes).rjust(6),
+        ]
+
+        print(" ".join(row))
 
 
 def runtime_info(args: argparse.Namespace, pool_configs: List[PoolConfig], start_local: str, start_utc: str) -> Dict[str, Any]:
@@ -747,62 +787,107 @@ def print_final_report(
     duration: int,
     meta: Dict[str, Any],
     race_limit: Optional[int] = None,
+    verbose: bool = False,
+    debug: bool = False,
+    full_timing: bool = False,
 ) -> None:
     confirmed = [r for r in races if r.confirmed]
     unconfirmed = [r for r in races if not r.confirmed]
 
-    print("\n================ FINAL REPORT ================\n")
+    print("\n================ SUMMARY ================\n")
     print("Credit: @proofofmike / ProofOfMike.com")
     print(f"Run duration: {duration}s")
     print(f"Confirmed races: {len(confirmed)}")
     print(f"Unconfirmed provisional races: {len(unconfirmed)}")
+
     if len(confirmed) < MIN_DIRECTIONAL_RACES:
         print(
             f"WARNING: only {len(confirmed)} confirmed races. Treat this as directional, "
             f"not statistically final. Suggested minimum: {MIN_DIRECTIONAL_RACES}+ races."
         )
-    print()
 
-    print_pool_table(pools)
     print_rankings(pools, len(confirmed))
-    print_race_detail(races, limit=race_limit)
 
-    print("\nCONNECTION DETAIL:")
-    for p in pools.values():
-        print(
-            f"{p.name:<12} attempts={p.connect_attempts} "
-            f"connected={p.connections} reconnects={p.reconnects} "
-            f"timeouts={p.read_timeouts} remote_closed={p.remote_closes} "
-            f"connect_timeouts={p.connect_timeouts} connect_errors={p.connect_errors} "
-            f"other_disconnects={p.other_disconnects} "
-            f"first_notify={p.first_notify_at_wall or 'N/A'} last_notify={p.last_notify_at_wall or 'N/A'}"
-        )
+    if full_timing:
+        print_full_timing_table(pools, len(confirmed))
 
-    print("\nDEBUG ARRIVAL OFFSETS INCLUDING WINS:")
-    for pool_name, p in pools.items():
-        print(pool_name, p.all_arrival_offsets)
+    problem_pools = [
+        p for p in pools.values()
+        if p.reconnects or p.read_timeouts or p.remote_closes or p.connect_timeouts or p.connect_errors
+    ]
 
-    print("\nRUNTIME:")
-    print(f"  started_local = {meta['started_local']}")
-    print(f"  started_utc   = {meta['started_utc']}")
-    print(f"  python        = {meta['python']}")
-    print(f"  platform      = {meta['platform']}")
-    print(f"  client        = {CLIENT_VERSION}")
-    print(f"  confirm_window={CONFIRM_WINDOW}s read_timeout={READ_TIMEOUT}s reconnect_delay={RECONNECT_DELAY}s")
+    print("\nCONNECTION ISSUES:")
+    if not problem_pools:
+        print("  none")
+    else:
+        for p in sorted(problem_pools, key=lambda x: (-x.reconnects, -x.read_timeouts, x.name)):
+            parts = []
+            if p.reconnects:
+                parts.append(f"reconnects={p.reconnects}")
+            if p.read_timeouts:
+                parts.append(f"timeouts={p.read_timeouts}")
+            if p.remote_closes:
+                parts.append(f"closed={p.remote_closes}")
+            if p.connect_timeouts:
+                parts.append(f"connect_timeouts={p.connect_timeouts}")
+            if p.connect_errors:
+                parts.append(f"connect_errors={p.connect_errors}")
+            print(f"  {p.name:<12} " + " ".join(parts))
 
-    print("\nNotes:")
-    print("  win        = first pool observed by this client/vantage point, not global propagation proof")
-    print("  timestamp  = asyncio event-loop time taken immediately after readline() returns")
-    print("  baseline   = first notify after connect/reconnect, clean=true OR clean=false")
-    print("  race       = only clean=true + prevhash changed")
-    print("  seen       = confirmed races where this pool's notify arrived inside the window")
-    print("  miss       = confirmed races this pool was eligible for but did not match inside the window")
-    print("  avg/med/p95/std/best/worst are arrival offsets in ms including wins as 0.0ms")
-    print("  unmatch    = provisional starts by this pool that never got a second pool confirmation")
-    print("  stale      = clean=true prevhash already seen/closed")
-    print("  unstable   = clean=true prevhash change while the pool was not eligible to start")
-    print("  reconnects = established session ended and reconnected: read timeout, remote close, or other disconnect")
-    print("  noise      = clean=false same-prevhash notify/template refresh")
+    selected = confirmed[-race_limit:] if race_limit and race_limit > 0 else confirmed
+
+    print("\nPER-RACE TIMING:")
+    if not selected:
+        print("  none")
+    else:
+        for race in selected:
+            arrivals = sorted(race.arrival_offsets_ms().items(), key=lambda kv: kv[1])
+            top = ", ".join(f"{name} +{delay:.1f}ms" for name, delay in arrivals[:3])
+            more = f" (+{len(arrivals) - 3} more)" if len(arrivals) > 3 else ""
+            print(
+                f"  {race.index:>3}. {race.prevhash[:10]} winner={race.first_pool:<12} "
+                f"{top}{more}"
+            )
+
+    print("\nNote: winner means first observed by this client/vantage point, not global propagation proof.")
+
+    if verbose:
+        print("\nFULL POOL TABLE:")
+        print_pool_table(pools)
+        print_race_detail(races, limit=race_limit)
+
+    if debug:
+        print("\nCONNECTION DETAIL:")
+        for p in pools.values():
+            print(
+                f"{p.name:<12} attempts={p.connect_attempts} "
+                f"connected={p.connections} reconnects={p.reconnects} "
+                f"timeouts={p.read_timeouts} remote_closed={p.remote_closes} "
+                f"connect_timeouts={p.connect_timeouts} connect_errors={p.connect_errors} "
+                f"other_disconnects={p.other_disconnects} "
+                f"first_notify={p.first_notify_at_wall or 'N/A'} last_notify={p.last_notify_at_wall or 'N/A'}"
+            )
+
+        print("\nDEBUG ARRIVAL OFFSETS INCLUDING WINS:")
+        for pool_name, p in pools.items():
+            print(pool_name, p.all_arrival_offsets)
+
+        print("\nRUNTIME:")
+        print(f"  started_local = {meta['started_local']}")
+        print(f"  started_utc   = {meta['started_utc']}")
+        print(f"  python        = {meta['python']}")
+        print(f"  platform      = {meta['platform']}")
+        print(f"  client        = {CLIENT_VERSION}")
+        print(f"  confirm_window={CONFIRM_WINDOW}s read_timeout={READ_TIMEOUT}s reconnect_delay={RECONNECT_DELAY}s")
+
+        print("\nDEBUG NOTES:")
+        print("  timestamp  = asyncio event-loop time taken immediately after readline() returns")
+        print("  baseline   = first notify after connect/reconnect, clean=true OR clean=false")
+        print("  race       = only clean=true + prevhash changed")
+        print("  seen       = confirmed races where this pool's notify arrived inside the window")
+        print("  miss       = confirmed races this pool was eligible for but did not match inside the window")
+        print("  reconnects = established session ended and reconnected: read timeout, remote close, or other disconnect")
+        print("  noise      = clean=false same-prevhash notify/template refresh")
 
 
 def send_json(writer: asyncio.StreamWriter, obj: object) -> None:
@@ -1025,6 +1110,9 @@ async def run(args: argparse.Namespace) -> None:
         duration=args.duration,
         meta=meta,
         race_limit=args.race_limit,
+        verbose=args.verbose,
+        debug=args.debug,
+        full_timing=args.full_timing,
     )
 
     if args.json_out:
@@ -1045,6 +1133,9 @@ def main() -> None:
     parser.add_argument("--json-out", help="Write structured JSON results to this path")
     parser.add_argument("--csv-out", help="Write pool/race CSV results. If path ends .csv, race CSV appends _races.csv")
     parser.add_argument("--race-limit", type=int, default=0, help="Limit per-race detail printed; 0 prints all races")
+    parser.add_argument("--verbose", action="store_true", help="Print full pool table and full per-race detail")
+    parser.add_argument("--full-timing", action="store_true", help="Print compact timing table for all pools")
+    parser.add_argument("--debug", action="store_true", help="Print connection detail, runtime info, and raw timing arrays")
     parser.add_argument("--probe-interval", type=int, default=0, help="Accepted for compatibility, ignored")
     parser.add_argument("--no-ping", action="store_true", help="Accepted for compatibility, ignored")
     args = parser.parse_args()
